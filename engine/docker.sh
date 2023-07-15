@@ -125,6 +125,14 @@ function remove_image() {
     "${DOCKER}" rmi -f "${image_id}" 1> /dev/null || die "Failed to remove image ${image_id}"
 }
 
+# Add proxy environment vars to global _container_env array if non-empty, also adds a respective lower case version
+function populate_proxy_env() {
+  local proxy_var
+  for proxy_var in 'HTTP_PROXY' 'HTTPS_PROXY' 'FTP_PROXY' 'NO_PROXY'; do
+    [ -n "${!proxy_var}" ] && _container_env+=("${proxy_var}=${!proxy_var}" "${proxy_var,,}=${!proxy_var}")
+  done
+}
+
 # Build the image for given image_id
 #
 # Arguments:
@@ -246,6 +254,8 @@ function build_image() {
             _container_env+=("${bob_var}=${!bob_var}")
         done
 
+        populate_proxy_env
+
         _container_args=()
         [[ ${#BUILDER_DOCKER_ARGS_GLOBAL[@]} -gt 0 ]] && _container_args+=("${BUILDER_DOCKER_ARGS_GLOBAL[@]}")
         [[ ${#BUILDER_DOCKER_ARGS[@]} -gt 0 ]] && _container_args+=("${BUILDER_DOCKER_ARGS[@]}")
@@ -333,7 +343,7 @@ test_image() {
     fi
 
     # run a detached container and monitor Docker's health-check status
-    if [[ -n "${POST_BUILD_HC}" ]]; then
+    if [[ -n "${POST_BUILD_HC}" && "${POST_BUILD_HC}" != false ]]; then
         local hc_current_duration hc_healthy_streak hc_failed_streak hc_itr hc_status hc_log status_tmpl hc_streak_bar
         POST_BUILD_HC_MAX_DURATION="${POST_BUILD_HC_MAX_DURATION:-30}"
         POST_BUILD_HC_INTERVAL="${POST_BUILD_HC_INTERVAL:-5}"
