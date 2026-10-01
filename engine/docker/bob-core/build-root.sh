@@ -269,7 +269,7 @@ function generate_doc_package_installed() {
     # generate installed package list with use flags
     # shellcheck disable=SC2086,SC2068
     "${_emerge_bin}" ${_emerge_opt} --binpkg-respect-use=y -p ${packages[@]} \
-        | perl -nle 'print "$1 | `$3`" if /\[.*\] (.*) to \/.*\/( USE=")?([a-z0-9\- (){}]*)?/' \
+        | perl -nle 'print "$1 | `$2`" if /\[.*\] (.*) to \/.*\/(?: USE="([a-zA-Z0-9\- (){}]*))?/' \
         | sed /^virtual/d | sort -u >> "${_DOC_PACKAGE_INSTALLED}"
     # enable binary package features again
     export EMERGE_DEFAULT_OPTS="${current_emerge_opts}"
@@ -577,7 +577,8 @@ function build_rootfs() {
     source /etc/profile
 
     # remove existing binary package cache file(s) if specified
-    local no_cache_var no_cache_package current_tag cache_tag cache_tag_base bin_package_path
+    local no_cache_var no_cache_package current_tag cache_tag cache_tag_base bin_package_path removed_bin_package
+    removed_bin_package='false'
     for no_cache_var in ${!_no_cache*}; do
         current_tag=
         [[ "${no_cache_var}" != '_no_cache' ]] && current_tag="${no_cache_var##*_}"
@@ -587,7 +588,7 @@ function build_rootfs() {
             [[ -n ${current_tag} ]] && cache_tag="${PKGDIR}/.no-cache-tags/${current_tag}/${no_cache_package%.xpak}"
             if [[ -n ${current_tag} && ! -e ${cache_tag} || -z ${current_tag} ]]; then
                 bin_package_path="${PKGDIR}/${no_cache_package}"
-                [[ -e "${bin_package_path}" ]] && rm -r "${bin_package_path}"
+                [[ -e "${bin_package_path}" ]] && rm -r "${bin_package_path}" && removed_bin_package='true'
                 if [[ -n "${current_tag}" ]]; then
                     cache_tag_base="${cache_tag}"
                     [[ "${no_cache_package}" == *'.xpak' ]] && cache_tag_base="${cache_tag%/*}"
@@ -597,6 +598,12 @@ function build_rootfs() {
             fi
         done
     done
+    # with FEATURES=pkgdir-index-trusted Portage doesn't notice removed binary packages, rebuild the index in that case.
+    # not required with the kubler default of -pkgdir-index-trusted, see BOB_FEATURES in kubler.conf
+    if [[ "${removed_bin_package}" == 'true' && " $(portageq envvar FEATURES) " == *' pkgdir-index-trusted '* ]]; then
+        echo "--> FEATURES=pkgdir-index-trusted is active, rebuilding binary package index"
+        emaint binhost --fix || die "Failed to rebuild the binary package index at ${PKGDIR}"
+    fi
 
     # call configure_builder hook if declared in build.sh
     if declare -F configure_builder &>/dev/null; then
@@ -643,7 +650,7 @@ function build_rootfs() {
             mkdir -p "${_PORTAGE_LOGDIR}"
             export PORTAGE_LOGDIR="${_PORTAGE_LOGDIR}"
         fi
-        
+
         # install packages defined in image's build.sh
         # shellcheck disable=SC2086
         "${_emerge_bin}" ${_emerge_opt} --binpkg-respect-use=y -v ${_packages}
@@ -672,8 +679,9 @@ function build_rootfs() {
 
     fi
 
-    # handle bug in portage when using custom root, any user/groups created during package installs are not created
-    # at the custom root but on the host
+    # with ACCT_IGNORE_ROOT set (see bob-portage eclass patches) any user/groups created during package installs are
+    # not created at the custom root but on the builder, so we copy the account files over if they changed. As the
+    # builder is reused by extending images this also carries over the users/groups of all parent images
     copy_from_builder_if_changed '/etc/passwd' "${passwd_date}"
     copy_from_builder_if_changed '/etc/group' "${group_date}"
 
